@@ -31,7 +31,6 @@ jobs:
           
           chmod +x Payload/AppBatchDeleter.app/AppBatchDeleter
 
-          # Ký quyền TrollStore Unsandbox vào file thi hành
           ldid -SEntitlements.plist Payload/AppBatchDeleter.app/AppBatchDeleter
 
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
@@ -44,7 +43,7 @@ jobs:
               <key>CFBundleName</key>
               <string>AppBatchDeleter</string>
               <key>CFBundleDisplayName</key>
-              <string>Batch Deleter</string>
+              <string>Batch Deleter JB</string>
               <key>CFBundleExecutable</key>
               <string>AppBatchDeleter</string>
               <key>CFBundlePackageType</key>

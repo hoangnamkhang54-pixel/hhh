@@ -10,5 +10,11 @@
     <true/>
     <key>com.apple.private.lsopen</key>
     <true/>
+    <key>com.apple.private.mobileinstall.uninstall</key>
+    <true/>
+    <key>get-task-allow</key>
+    <true/>
+    <key>task_for_pid-allow</key>
+    <true/>
 </dict>
 </plist>

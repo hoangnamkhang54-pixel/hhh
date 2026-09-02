@@ -1,4 +1,4 @@
-name: Build iOS App
+name: Build iOS IPA
 
 on:
   push:
@@ -14,27 +14,50 @@ jobs:
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Create basic Swift Package structure for compilation
+      - name: Build Executable for iOS Simulator
         run: |
-          cat << 'EOF' > Package.swift
-          // swift-tools-version: 5.8
-          import PackageDescription
-          let package = Package(
-              name: "AppBatchDeleter",
-              platforms: [.iOS(.v15)],
-              products: [.library(name: "AppBatchDeleter", targets: ["AppBatchDeleter"])],
-              targets: [.target(name: "AppBatchDeleter", path: ".")]
-          )
+          swift build -c release --triple arm64-apple-ios-simulator
+
+      - name: Package into .app and .ipa structure
+        run: |
+          mkdir -p Payload/AppBatchDeleter.app
+          cp .build/arm64-apple-ios-simulator/release/AppBatchDeleter Payload/AppBatchDeleter.app/AppBatchDeleter
+          
+          # Tạo file Info.plist tối thiểu cho ứng dụng iOS
+          cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleIdentifier</key>
+              <string>com.hoangnamkhang.AppBatchDeleter</string>
+              <key>CFBundleName</key>
+              <string>AppBatchDeleter</string>
+              <key>CFBundleDisplayName</key>
+              <string>AppBatchDeleter</string>
+              <key>CFBundleExecutable</key>
+              <string>AppBatchDeleter</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>MinimumOSVersion</key>
+              <string>15.0</string>
+              <key>UILaunchScreen</key>
+              <dict/>
+          </dict>
+          </dict>
+          </plist>
           EOF
 
-      - name: Build for iOS Simulator/Device
-        run: |
-          swift build -Xswiftc "-sdk" -Xswiftc "$(xcrun --sdk iphonesimulator --show-sdk-path)" -Xswiftc "-target" -Xswiftc "arm64-apple-ios14.0-simulator" || true
-          mkdir -p Payload
-          echo "Placeholder for IPA packaging" > Payload/Info.plist
+          cd Payload
+          zip -r ../AppBatchDeleter.ipa AppBatchDeleter.app
+          cd ..
 
-      - name: Create IPA Artifact
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AppBatchDeleter-IPA
-          path: Payload/
+          path: AppBatchDeleter.ipa

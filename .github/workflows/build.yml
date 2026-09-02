@@ -11,15 +11,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install ldid
+        run: brew install ldid
+
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Bien dich Swift va Dong goi Payload
+      - name: Bien dich va Ky Entitlements
         run: |
           set -e
           mkdir -p Payload/AppBatchDeleter.app
           
-          # Copy Icon sang thuc muc app
           cp AppIcon60x60@2x.png Payload/AppBatchDeleter.app/
           cp AppIcon60x60@3x.png Payload/AppBatchDeleter.app/
           
@@ -28,6 +30,9 @@ jobs:
           swiftc AppBatchDeleterApp.swift             -parse-as-library             -target arm64-apple-ios15.0             -sdk "$SDK_PATH"             -o Payload/AppBatchDeleter.app/AppBatchDeleter
           
           chmod +x Payload/AppBatchDeleter.app/AppBatchDeleter
+
+          # Ký quyền TrollStore Unsandbox vào file thi hành
+          ldid -SEntitlements.plist Payload/AppBatchDeleter.app/AppBatchDeleter
 
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>

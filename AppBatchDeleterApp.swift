@@ -10,23 +10,49 @@ class AppManagerViewModel: ObservableObject {
     @Published var installedApps: [AppItem] = []
     @Published var searchText: String = ""
     @Published var isDeleting: Bool = false
-    @Published var statusMessage: String = ""
+    @Published var isLoading: Bool = true
 
     func loadApps() {
-        var apps: [AppItem] = []
-        if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
-            let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
-            if let installedPlugins = workspace.perform(Selector(("allInstalledApplications"))).takeUnretainedValue() as? [AnyObject] {
-                for app in installedPlugins {
-                    if let bundleID = app.perform(Selector(("applicationIdentifier"))).takeUnretainedValue() as? String,
-                       let localizedName = app.perform(Selector(("localizedName"))).takeUnretainedValue() as? String {
-                        apps.append(AppItem(id: bundleID, name: localizedName))
+        DispatchQueue.global(qos: .userInitiated).async {
+            var apps: [AppItem] = []
+            
+            if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
+                let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
+                
+                let selectors = ["allInstalledApplications", "allApplications"]
+                var rawApps: [AnyObject]? = nil
+                
+                for selName in selectors {
+                    let sel = Selector((selName))
+                    if workspace.responds(to: sel) {
+                        if let res = workspace.perform(sel)?.takeUnretainedValue() as? [AnyObject] {
+                            rawApps = res
+                            break
+                        }
+                    }
+                }
+                
+                if let appList = rawApps {
+                    for app in appList {
+                        let idSel = Selector(("applicationIdentifier"))
+                        let nameSel = Selector(("localizedName"))
+                        
+                        if app.responds(to: idSel) && app.responds(to: nameSel) {
+                            if let bundleID = app.perform(idSel)?.takeUnretainedValue() as? String,
+                               let localizedName = app.perform(nameSel)?.takeUnretainedValue() as? String {
+                                if !bundleID.isEmpty && !localizedName.isEmpty {
+                                    apps.append(AppItem(id: bundleID, name: localizedName))
+                                }
+                            }
+                        }
                     }
                 }
             }
-        }
-        DispatchQueue.main.async {
-            self.installedApps = apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            
+            DispatchQueue.main.async {
+                self.installedApps = apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                self.isLoading = false
+            }
         }
     }
 
@@ -35,15 +61,19 @@ class AppManagerViewModel: ObservableObject {
         guard !selected.isEmpty else { return }
 
         isDeleting = true
-        statusMessage = "Đang xóa..."
 
         DispatchQueue.global(qos: .userInitiated).async {
             if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
                 let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
+                let uninstallSel = Selector(("uninstallApplication:withOptions:"))
+                
                 for app in selected {
-                    _ = workspace.perform(Selector(("uninstallApplication:withOptions:")), with: app.id, with: nil)
+                    if workspace.responds(to: uninstallSel) {
+                        _ = workspace.perform(uninstallSel, with: app.id as NSString, with: nil)
+                    }
                 }
             }
+            
             DispatchQueue.main.async {
                 self.isDeleting = false
                 self.loadApps()
@@ -98,32 +128,58 @@ struct ContentView: View {
                 HStack {
                     Button("Chọn tất cả") { viewModel.selectAll() }
                     Spacer()
+                    Text("Tổng: \(viewModel.installedApps.count) app")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Spacer()
                     Button("Bỏ chọn") { viewModel.deselectAll() }.foregroundColor(.red)
                 }
                 .padding(.horizontal)
                 .padding(.top, 5)
 
-                List {
-                    ForEach(filteredApps) { app in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(app.name).font(.headline)
-                                Text(app.id).font(.caption).foregroundColor(.gray)
+                if viewModel.isLoading {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Đang quét danh sách ứng dụng...")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+                    .frame(maxHeight: .infinity)
+                } else if viewModel.installedApps.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.largeTitle)
+                            .foregroundColor(.orange)
+                        Text("Không tìm thấy ứng dụng hoặc ứng dụng chưa được cấp quyền Unsandbox qua TrollStore.")
+                            .multilineTextAlignment(.center)
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .padding()
+                    }
+                    .frame(maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(filteredApps) { app in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(app.name).font(.headline)
+                                    Text(app.id).font(.caption).foregroundColor(.gray)
+                                }
+                                Spacer()
+                                Image(systemName: app.isSelected ? "checkmark.circle.fill" : "circle")
+                                    .font(.title2)
+                                    .foregroundColor(app.isSelected ? .blue : .gray)
                             }
-                            Spacer()
-                            Image(systemName: app.isSelected ? "checkmark.circle.fill" : "circle")
-                                .font(.title2)
-                                .foregroundColor(app.isSelected ? .blue : .gray)
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if let index = viewModel.installedApps.firstIndex(where: { $0.id == app.id }) {
-                                viewModel.installedApps[index].isSelected.toggle()
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if let index = viewModel.installedApps.firstIndex(where: { $0.id == app.id }) {
+                                    viewModel.installedApps[index].isSelected.toggle()
+                                }
                             }
                         }
                     }
+                    .listStyle(PlainListStyle())
                 }
-                .listStyle(PlainListStyle())
 
                 if selectedCount > 0 {
                     Button(action: { viewModel.deleteSelectedApps() }) {
@@ -139,6 +195,7 @@ struct ContentView: View {
                         .cornerRadius(12)
                     }
                     .padding()
+                    .disabled(viewModel.isDeleting)
                 }
             }
             .navigationTitle("Batch Deleter")

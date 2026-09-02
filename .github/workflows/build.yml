@@ -14,18 +14,14 @@ jobs:
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Build App for iOS Simulator via xcodebuild
+      - name: Compile and Package App
         run: |
-          # Biên dịch trực tiếp target cho iOS Simulator
-          xcodebuild -theProjectName AppBatchDeleter -scmProvider system || true
-          
-          # Tạo cấu trúc thư mục Payload chuẩn của file IPA
           mkdir -p Payload/AppBatchDeleter.app
           
-          # Biên dịch mã nguồn Swift trực tiếp thành tệp thi hành arm64
-          swiftc AppBatchDeleterApp.swift -target arm64-apple-ios14.0-simulator -sdk $(xcrun --sdk iphonesimulator --show-sdk-path) -o Payload/AppBatchDeleter.app/AppBatchDeleter ||           swiftc AppBatchDeleterApp.swift -sdk $(xcrun --sdk iphonesimulator --show-sdk-path) -o Payload/AppBatchDeleter.app/AppBatchDeleter
+          # Biên dịch file main.swift thành tệp thi hành arm64 cho iOS Simulator
+          swiftc main.swift -target arm64-apple-ios14.0-simulator -sdk $(xcrun --sdk iphonesimulator --show-sdk-path) -o Payload/AppBatchDeleter.app/AppBatchDeleter
 
-          # Tạo file Info.plist cấu hình ứng dụng
+          # Tạo file Info.plist chuẩn cho ứng dụng iOS
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -51,7 +47,7 @@ jobs:
           </plist>
           EOF
 
-          # Đóng gói thành file IPA
+          # Nén thư mục Payload thành file .ipa
           cd Payload
           zip -r ../AppBatchDeleter.ipa AppBatchDeleter.app
           cd ..

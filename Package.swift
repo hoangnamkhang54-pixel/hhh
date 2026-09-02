@@ -3,12 +3,12 @@ import PackageDescription
 
 let package = Package(
     name: "AppBatchDeleter",
-    platforms: [.iOS(.v15)],
+    platforms: [.iOS(.15)],
     products: [
-        .executableName(name: "AppBatchDeleter")
+        .library(name: "AppBatchDeleter", targets: ["AppBatchDeleter"])
     ],
     targets: [
-        .executableTarget(
+        .target(
             name: "AppBatchDeleter",
             path: "."
         )

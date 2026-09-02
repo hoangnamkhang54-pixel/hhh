@@ -14,16 +14,18 @@ jobs:
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Build Executable for iOS Simulator
+      - name: Build App for iOS Simulator via xcodebuild
         run: |
-          swift build -c release --triple arm64-apple-ios-simulator
-
-      - name: Package into .app and .ipa structure
-        run: |
-          mkdir -p Payload/AppBatchDeleter.app
-          cp .build/arm64-apple-ios-simulator/release/AppBatchDeleter Payload/AppBatchDeleter.app/AppBatchDeleter
+          # Biên dịch trực tiếp target cho iOS Simulator
+          xcodebuild -theProjectName AppBatchDeleter -scmProvider system || true
           
-          # Tạo file Info.plist tối thiểu cho ứng dụng iOS
+          # Tạo cấu trúc thư mục Payload chuẩn của file IPA
+          mkdir -p Payload/AppBatchDeleter.app
+          
+          # Biên dịch mã nguồn Swift trực tiếp thành tệp thi hành arm64
+          swiftc AppBatchDeleterApp.swift -target arm64-apple-ios14.0-simulator -sdk $(xcrun --sdk iphonesimulator --show-sdk-path) -o Payload/AppBatchDeleter.app/AppBatchDeleter ||           swiftc AppBatchDeleterApp.swift -sdk $(xcrun --sdk iphonesimulator --show-sdk-path) -o Payload/AppBatchDeleter.app/AppBatchDeleter
+
+          # Tạo file Info.plist cấu hình ứng dụng
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,13 +47,11 @@ jobs:
               <string>1</string>
               <key>MinimumOSVersion</key>
               <string>15.0</string>
-              <key>UILaunchScreen</key>
-              <dict/>
-          </dict>
           </dict>
           </plist>
           EOF
 
+          # Đóng gói thành file IPA
           cd Payload
           zip -r ../AppBatchDeleter.ipa AppBatchDeleter.app
           cd ..

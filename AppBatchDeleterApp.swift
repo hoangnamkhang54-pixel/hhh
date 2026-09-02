@@ -6,12 +6,14 @@ struct ContentView: View {
             Image(systemName: "trash.circle.fill")
                 .font(.system(size: 80))
                 .foregroundColor(.red)
-            Text("Batch Deleter")
+            Text("App Batch Deleter")
                 .font(.largeTitle)
                 .bold()
-            Text("Sẵn sàng chạy trên TrollStore!")
-                .foregroundColor(.gray)
+            Text("Ứng dụng đã sẵn sàng trên TrollStore!")
+                .foregroundColor(.green)
+                .multilineTextAlignment(.center)
         }
+        .padding()
     }
 }
 

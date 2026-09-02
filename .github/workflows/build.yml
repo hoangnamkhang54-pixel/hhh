@@ -14,15 +14,22 @@ jobs:
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Bien dich va Dong goi
+      - name: Bien dich Swift va Dong goi Payload
         run: |
-          # 1. Tạo cấu trúc thư mục Payload bắt buộc cho TrollStore
+          set -e
+          
+          # Tạo cấu trúc thư mục Payload
           mkdir -p Payload/AppBatchDeleter.app
           
-          # 2. Biên dịch SwiftUI thành tệp chạy trên iPhone thật (arm64)
-          swiftc AppBatchDeleterApp.swift -target arm64-apple-ios15.0 -sdk $(xcrun --show-sdk-path -sdk iphoneos) -parse-as-library -o Payload/AppBatchDeleter.app/AppBatchDeleter
+          # Lấy đường dẫn SDK iOS
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          
+          # Biên dịch trực tiếp Swift code thành file thực thi arm64
+          swiftc AppBatchDeleterApp.swift             -parse-as-library             -target arm64-apple-ios15.0             -sdk "$SDK_PATH"             -o Payload/AppBatchDeleter.app/AppBatchDeleter
+          
+          chmod +x Payload/AppBatchDeleter.app/AppBatchDeleter
 
-          # 3. Tạo file cấu hình Info.plist
+          # Tạo Info.plist
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -50,7 +57,7 @@ jobs:
           </plist>
           EOF
 
-          # 4. Nén nguyên thư mục Payload thành file .ipa
+          # Nén thư mục Payload thành file .ipa
           zip -r AppBatchDeleter.ipa Payload
 
       - name: Tai file IPA len Artifacts
@@ -58,3 +65,4 @@ jobs:
         with:
           name: AppBatchDeleter-IPA
           path: AppBatchDeleter.ipa
+          if-no-files-found: error

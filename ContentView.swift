@@ -86,88 +86,87 @@ struct ContentView: View {
                                                 .foregroundColor(app.isSelected.wrappedValue ? .blue : .gray)
                                                 .font(.system(size: 20))
                                             VStack(alignment: .leading, spacing: 4) {
-                                            Text(app.name.wrappedValue)
-                                                .font(.headline)
-                                                .foregroundColor(.primary)
-                                            Text(app.id.wrappedValue)
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
+                                                Text(app.name.wrappedValue)
+                                                    .font(.headline)
+                                                    .foregroundColor(.primary)
+                                                Text(app.id.wrappedValue)
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
                                         }
                                     }
+                                    .buttonStyle(PlainButtonStyle())
+                                    .padding(.vertical, 4)
                                 }
-                                .buttonStyle(PlainButtonStyle())
-                                .padding(.vertical, 4)
                             }
                         }
                     }
-                }
-            }
-            .searchable(text: $searchText, prompt: "Tìm kiếm ứng dụng...")
-            .listStyle(InsetGroupedListStyle())
-            
-            if !viewModel.statusMessage.isEmpty {
-                Text(viewModel.statusMessage)
-                    .font(.subheadline)
-                    .foregroundColor(.blue)
-                    .padding(.horizontal)
-            }
-            
-            VStack(spacing: 10) {
-                HStack(spacing: 12) {
-                    Button(action: {
-                        let allSelected = viewModel.installedApps.allSatisfy { $0.isSelected }
-                        for i in 0..<viewModel.installedApps.count {
-                            viewModel.installedApps[i].isSelected = !allSelected
-                        }
-                    }) {
-                        Text("Chọn tất cả")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.gray.opacity(0.15))
-                            .foregroundColor(.primary)
-                            .cornerRadius(12)
+                    .searchable(text: $searchText, prompt: "Tìm kiếm ứng dụng...")
+                    .listStyle(InsetGroupedListStyle())
+                    
+                    if !viewModel.statusMessage.isEmpty {
+                        Text(viewModel.statusMessage)
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
+                            .padding(.horizontal)
                     }
                     
-                    Button(action: {
-                        showConfirmAlert = true
-                    }) {
-                        Text("Xóa đã chọn (\(viewModel.installedApps.filter({ $0.isSelected }).count))")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(viewModel.installedApps.contains(where: { $0.isSelected }) ? Color.red : Color.gray.opacity(0.4))
-                            .foregroundColor(.white)
-                            .cornerRadius(12)
+                    VStack(spacing: 10) {
+                        HStack(spacing: 12) {
+                            Button(action: {
+                                let allSelected = viewModel.installedApps.allSatisfy { $0.isSelected }
+                                for i in 0..<viewModel.installedApps.count {
+                                    viewModel.installedApps[i].isSelected = !allSelected
+                                }
+                            }) {
+                                Text("Chọn tất cả")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.gray.opacity(0.15))
+                                    .foregroundColor(.primary)
+                                    .cornerRadius(12)
+                            }
+                            
+                            Button(action: {
+                                showConfirmAlert = true
+                            }) {
+                                Text("Xóa đã chọn (\(viewModel.installedApps.filter({ $0.isSelected }).count))")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(viewModel.installedApps.contains(where: { $0.isSelected }) ? Color.red : Color.gray.opacity(0.4))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
+                            .disabled(!viewModel.installedApps.contains(where: { $0.isSelected }) || viewModel.isDeleting)
+                        }
                     }
-                    .disabled(!viewModel.installedApps.contains(where: { $0.isSelected }) || viewModel.isDeleting)
+                    .padding()
+                    .background(Color(.systemBackground))
                 }
             }
-            .padding()
-            .background(Color(.systemBackground))
-        }
-    }
-    .navigationTitle("TrollStore Batch Delete")
-    .toolbar {
-        ToolbarItem(placement: .navigationBarTrailing) {
-            Button(action: {
-                viewModel.loadApps()
-            }) {
-                Image(systemName: "arrow.clockwise")
+            .navigationTitle("TrollStore Batch Delete")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        viewModel.loadApps()
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+            .alert(isPresented: $showConfirmAlert) {
+                Alert(
+                    title: Text("Xác nhận xóa"),
+                    message: Text("Bạn có chắc chắn muốn gỡ cài đặt các ứng dụng đã chọn không?"),
+                    primaryButton: .destructive(Text("Xóa")) {
+                        let selectedIDs = viewModel.installedApps.filter { $0.isSelected }.map { $0.id }
+                        viewModel.deleteApps(bundleIDs: selectedIDs)
+                    },
+                    secondaryButton: .cancel(Text("Hủy"))
+                )
             }
         }
     }
-    .alert(isPresented: $showConfirmAlert) {
-        Alert(
-            title: Text("Xác nhận xóa"),
-            message: Text("Bạn có chắc chắn muốn gỡ cài đặt các ứng dụng đã chọn không?"),
-            primaryButton: .destructive(Text("Xóa")) {
-                let selectedIDs = viewModel.installedApps.filter { $0.isSelected }.map { $0.id }
-                viewModel.deleteApps(bundleIDs: selectedIDs)
-            },
-            secondaryButton: .cancel(Text("Hủy"))
-        )
-      }
-    }
-  }
 }

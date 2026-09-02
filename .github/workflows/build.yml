@@ -17,19 +17,18 @@ jobs:
       - name: Bien dich Swift va Dong goi Payload
         run: |
           set -e
-          
-          # Tạo cấu trúc thư mục Payload
           mkdir -p Payload/AppBatchDeleter.app
           
-          # Lấy đường dẫn SDK iOS
+          # Copy Icon sang thuc muc app
+          cp AppIcon60x60@2x.png Payload/AppBatchDeleter.app/
+          cp AppIcon60x60@3x.png Payload/AppBatchDeleter.app/
+          
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           
-          # Biên dịch trực tiếp Swift code thành file thực thi arm64
           swiftc AppBatchDeleterApp.swift             -parse-as-library             -target arm64-apple-ios15.0             -sdk "$SDK_PATH"             -o Payload/AppBatchDeleter.app/AppBatchDeleter
           
           chmod +x Payload/AppBatchDeleter.app/AppBatchDeleter
 
-          # Tạo Info.plist
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -40,7 +39,7 @@ jobs:
               <key>CFBundleName</key>
               <string>AppBatchDeleter</string>
               <key>CFBundleDisplayName</key>
-              <string>AppBatchDeleter</string>
+              <string>Batch Deleter</string>
               <key>CFBundleExecutable</key>
               <string>AppBatchDeleter</string>
               <key>CFBundlePackageType</key>
@@ -51,13 +50,28 @@ jobs:
               <string>1</string>
               <key>MinimumOSVersion</key>
               <string>15.0</string>
+              <key>CFBundleIconFiles</key>
+              <array>
+                  <string>AppIcon60x60</string>
+              </array>
+              <key>CFBundleIcons</key>
+              <dict>
+                  <key>CFBundlePrimaryIcon</key>
+                  <dict>
+                      <key>CFBundleIconFiles</key>
+                      <array>
+                          <string>AppIcon60x60</string>
+                      </array>
+                      <key>CFBundleIconName</key>
+                      <string>AppIcon</string>
+                  </dict>
+              </dict>
               <key>UILaunchScreen</key>
               <dict/>
           </dict>
           </plist>
           EOF
 
-          # Nén thư mục Payload thành file .ipa
           zip -r AppBatchDeleter.ipa Payload
 
       - name: Tai file IPA len Artifacts

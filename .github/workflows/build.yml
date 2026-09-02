@@ -12,7 +12,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ldid
-        run: brew install ldid
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
+        run: |
+          brew untap aws/tap || true
+          brew install ldid
 
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
@@ -43,7 +47,7 @@ jobs:
               <key>CFBundleName</key>
               <string>AppBatchDeleter</string>
               <key>CFBundleDisplayName</key>
-              <string>Batch Deleter JB</string>
+              <string>Batch Deleter Pro</string>
               <key>CFBundleExecutable</key>
               <string>AppBatchDeleter</string>
               <key>CFBundlePackageType</key>

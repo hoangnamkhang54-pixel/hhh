@@ -12,9 +12,9 @@
     <true/>
     <key>com.apple.private.mobileinstall.uninstall</key>
     <true/>
-    <key>get-task-allow</key>
+    <key>com.apple.private.mobileinstall.install</key>
     <true/>
-    <key>task_for_pid-allow</key>
+    <key>get-task-allow</key>
     <true/>
 </dict>
 </plist>

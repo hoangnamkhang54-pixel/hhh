@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import Darwin
 
 struct AppItem: Identifiable, Hashable {
     let id: String
@@ -9,8 +10,33 @@ struct AppItem: Identifiable, Hashable {
     var isSelected: Bool = false
 }
 
-// Execution Helper chay lenh Root bang posix_spawn
-func runRootCommand(_ command: String) -> Int32 {
+typealias MobileInstallationUninstallFunc = @convention(c) (CFString, CFDictionary?, UnsafeMutableRawPointer?) -> Int32
+
+func elevateToRoot() {
+    setuid(0)
+    setgid(0)
+}
+
+func uninstallAppViaMobileInstallation(bundleID: String) -> Bool {
+    elevateToRoot()
+    
+    guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_LAZY) else {
+        return false
+    }
+    defer { dlclose(handle) }
+    
+    guard let sym = dlsym(handle, "MobileInstallationUninstall") else {
+        return false
+    }
+    
+    let function = unsafeBitCast(sym, to: MobileInstallationUninstallFunc.self)
+    let result = function(bundleID as CFString, nil, nil)
+    return result == 0
+}
+
+func runRootShell(_ command: String) -> Int32 {
+    elevateToRoot()
+    
     let possibleShells = [
         "/var/jb/bin/sh",
         "/var/jb/usr/bin/sh",
@@ -53,7 +79,6 @@ class AppManagerViewModel: ObservableObject {
     @Published var searchText: String = ""
     @Published var isDeleting: Bool = false
     @Published var isLoading: Bool = true
-    @Published var statusMessage: String = ""
 
     func loadApps() {
         DispatchQueue.global(qos: .userInitiated).async {
@@ -123,8 +148,9 @@ class AppManagerViewModel: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async {
             for app in selected {
-                // Step 1: Unregister qua LaunchServices API
-                if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
+                let success = uninstallAppViaMobileInstallation(bundleID: app.id)
+                
+                if !success, let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
                     let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
                     let uninstallSel = Selector(("uninstallApplication:withOptions:"))
                     if workspace.responds(to: uninstallSel) {
@@ -132,18 +158,16 @@ class AppManagerViewModel: ObservableObject {
                     }
                 }
                 
-                // Step 2: Xoa thu muc app bang Quyen Root Jailbreak (rm -rf)
                 if let bundlePath = app.bundleURL?.path {
-                    let rmCommand = "rm -rf \"\(bundlePath)\""
-                    _ = runRootCommand(rmCommand)
+                    let rmCmd = "rm -rf \"\(bundlePath)\""
+                    _ = runRootShell(rmCmd)
                     
-                    // Step 3: Clear cache SpringBoard bang uicache
                     let uicacheCmd = "uicache -u \"\(bundlePath)\" || uicache -a || /var/jb/usr/bin/uicache -a"
-                    _ = runRootCommand(uicacheCmd)
+                    _ = runRootShell(uicacheCmd)
                 }
             }
             
-            Thread.sleep(forTimeInterval: 1.0)
+            Thread.sleep(forTimeInterval: 1.2)
             DispatchQueue.main.async {
                 self.isDeleting = false
                 self.loadApps()
@@ -210,7 +234,7 @@ struct ContentView: View {
                 if viewModel.isLoading {
                     VStack(spacing: 12) {
                         ProgressView()
-                        Text("Đang tải danh sách...")
+                        Text("Đang nạp danh sách...")
                             .font(.subheadline)
                             .foregroundColor(.gray)
                     }
@@ -264,7 +288,7 @@ struct ContentView: View {
                     Button(action: { viewModel.deleteSelectedApps() }) {
                         HStack {
                             Image(systemName: "trash.fill")
-                            Text("Xóa \(selectedCount) ứng dụng bằng Root JB")
+                            Text("Xóa \(selectedCount) ứng dụng (MobileInstallation)")
                                 .bold()
                         }
                         .frame(maxWidth: .infinity)
@@ -277,7 +301,7 @@ struct ContentView: View {
                     .disabled(viewModel.isDeleting)
                 }
             }
-            .navigationTitle("Batch Deleter JB")
+            .navigationTitle("Batch Deleter Pro")
             .onAppear { viewModel.loadApps() }
         }
     }

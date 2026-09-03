@@ -43,7 +43,7 @@ jobs:
           
           chmod +x Payload/AppBatchDeleter.app/AppBatchDeleter
 
-          # 2. Ký Entitlements root
+          # 2. Ký Entitlements root & MobileInstallation
           ldid -SEntitlements.plist Payload/AppBatchDeleter.app/AppBatchDeleter
 
           # 3. Ghi Info.plist cơ bản

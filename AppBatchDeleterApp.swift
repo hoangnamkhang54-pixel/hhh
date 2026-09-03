@@ -4,6 +4,8 @@ import Foundation
 import Darwin
 import UserNotifications
 
+typealias MobileInstallationUninstallFunc = @convention(c) (CFString, CFDictionary?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+
 struct AppItem: Identifiable, Hashable {
     let id: String
     let name: String
@@ -15,6 +17,36 @@ struct AppItem: Identifiable, Hashable {
 func elevateToRoot() {
     setuid(0)
     setgid(0)
+}
+
+func uninstallViaMobileInstallation(bundleID: String) -> Bool {
+    elevateToRoot()
+    guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_LAZY) else {
+        return false
+    }
+    defer { dlclose(handle) }
+    
+    guard let sym = dlsym(handle, "MobileInstallationUninstall") else {
+        return false
+    }
+    
+    let uninstallFunc = unsafeBitCast(sym, to: MobileInstallationUninstallFunc.self)
+    let options: [String: Any] = [:]
+    let result = uninstallFunc(bundleID as CFString, options as CFDictionary, nil, nil)
+    return result == 0
+}
+
+func uninstallViaLSWorkspace(bundleID: String) -> Bool {
+    elevateToRoot()
+    guard let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type else { return false }
+    let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
+    let uninstallSel = Selector(("uninstallApplication:withOptions:"))
+    if workspace.responds(to: uninstallSel) {
+        let options: [String: Any] = [:]
+        _ = workspace.perform(uninstallSel, with: bundleID as NSString, with: options as NSDictionary)
+        return true
+    }
+    return false
 }
 
 func isFilzaInstalled() -> Bool {
@@ -92,7 +124,8 @@ func findAllContainerPaths(for bundleID: String) -> [String] {
     let containerBases = [
         "/var/mobile/Containers/Data/Application",
         "/var/mobile/Containers/Shared/AppGroup",
-        "/var/mobile/Containers/Data/PluginKitPlugin"
+        "/var/mobile/Containers/Data/PluginKitPlugin",
+        "/var/jb/var/mobile/Containers/Data/Application"
     ]
     
     for base in containerBases {
@@ -114,10 +147,20 @@ func findAllContainerPaths(for bundleID: String) -> [String] {
 func uninstallAppCompletely(app: AppItem) {
     elevateToRoot()
 
+    // 1. Thử gỡ qua MobileInstallation (Private API Jailbreak)
+    let miSuccess = uninstallViaMobileInstallation(bundleID: app.id)
+    
+    // 2. Thử gỡ qua LSApplicationWorkspace
+    if !miSuccess {
+        _ = uninstallViaLSWorkspace(bundleID: app.id)
+    }
+
+    // 3. Gọi TrollStore Helper nếu có
     if let tsPath = findBinary("trollstorehelper") {
         _ = runBinary(tsPath, args: ["delete", app.id])
     }
 
+    // 4. Quét sạch tất cả Containers & Cache còn sót lại
     let containerPaths = findAllContainerPaths(for: app.id)
     for cPath in containerPaths {
         removePathRecursively(cPath)
@@ -131,6 +174,7 @@ func uninstallAppCompletely(app: AppItem) {
     removePathRecursively("/var/mobile/Library/Caches/\(app.id)")
     removePathRecursively("/var/mobile/Library/Saved Application State/\(app.id).savedState")
 
+    // 5. Làm sạch cache icon biểu tượng màn hình
     if let uicachePath = findBinary("uicache") {
         _ = runBinary(uicachePath, args: ["-u", app.id])
         _ = runBinary(uicachePath, args: ["-a"])
@@ -277,7 +321,7 @@ class AppManagerViewModel: ObservableObject {
 
             sendLocalNotification(
                 title: "Dọn dẹp hoàn tất",
-                body: "Đã xóa hoàn toàn \(deletedCount) ứng dụng và dọn dẹp toàn bộ dữ liệu, cache hệ thống."
+                body: "Đã xóa hoàn toàn \(deletedCount) ứng dụng và toàn bộ dữ liệu liên quan."
             )
 
             if bgTask != .invalid {

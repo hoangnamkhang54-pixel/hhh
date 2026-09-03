@@ -50,35 +50,11 @@ func findDataContainerPath(for bundleID: String) -> String? {
     return nil
 }
 
-func runRootShell(_ command: String) -> Int32 {
-    elevateToRoot()
-    let possibleShells = ["/var/jb/bin/sh", "/var/jb/usr/bin/sh", "/bin/sh", "/usr/bin/sh"]
-    var shellPath = "/bin/sh"
-    for path in possibleShells {
-        if FileManager.default.fileExists(atPath: path) {
-            shellPath = path
-            break
-        }
+func openInFilza(path: String) {
+    let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
+    if let url = URL(string: "filza://view\(encodedPath)") {
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
-
-    var pid: pid_t = 0
-    var args: [UnsafeMutablePointer<CChar>?] = [
-        strdup(shellPath),
-        strdup("-c"),
-        strdup(command),
-        nil
-    ]
-    defer {
-        for arg in args where arg != nil { free(arg) }
-    }
-
-    let status = posix_spawn(&pid, shellPath, nil, nil, &args, nil)
-    if status == 0 {
-        var exitStatus: Int32 = 0
-        waitpid(pid, &exitStatus, 0)
-        return exitStatus
-    }
-    return status
 }
 
 func sendLocalNotification(title: String, body: String) {
@@ -176,7 +152,6 @@ class AppManagerViewModel: ObservableObject {
     func startBatchDeleteProcess() {
         if !isFilzaInstalled() {
             showFilzaAlert = true
-            return
         }
 
         requestNotificationPermission { granted in
@@ -191,7 +166,9 @@ class AppManagerViewModel: ObservableObject {
         let selected = installedApps.filter { $0.isSelected }
         guard !selected.isEmpty else { return }
 
-        isDeleting = true
+        DispatchQueue.main.async {
+            self.isDeleting = true
+        }
 
         var bgTask: UIBackgroundTaskIdentifier = .invalid
         bgTask = UIApplication.shared.beginBackgroundTask(withName: "FilzaBatchDeleteTask") {
@@ -200,30 +177,37 @@ class AppManagerViewModel: ObservableObject {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
+            elevateToRoot()
             var deletedCount = 0
 
             for app in selected {
                 if let dataPath = findDataContainerPath(for: app.id) {
-                    _ = runRootShell("rm -rf \"\(dataPath)\"")
+                    try? FileManager.default.removeItem(atPath: dataPath)
                 }
 
                 if let bundlePath = app.bundleURL?.path {
-                    _ = runRootShell("rm -rf \"\(bundlePath)\"")
-                    _ = runRootShell("uicache -u \"\(bundlePath)\" || uicache -a || /var/jb/usr/bin/uicache -a")
-                } else {
-                    _ = runRootShell("uicache -u \"\(app.id)\" || uicache -a")
+                    try? FileManager.default.removeItem(atPath: bundlePath)
                 }
 
-                _ = runRootShell("trollstorehelper delete \"\(app.id)\" || /var/jb/usr/bin/trollstorehelper delete \"\(app.id)\"")
+                if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
+                    let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
+                    let uninstallSel = Selector(("uninstallApplication:withOptions:"))
+                    if workspace.responds(to: uninstallSel) {
+                        workspace.perform(uninstallSel, with: app.id, with: nil)
+                    } else {
+                        let uninstallSel2 = Selector(("uninstallApplication:"))
+                        if workspace.responds(to: uninstallSel2) {
+                            workspace.perform(uninstallSel2, with: app.id)
+                        }
+                    }
+                }
 
                 deletedCount += 1
             }
 
-            _ = runRootShell("uicache -a || /var/jb/usr/bin/uicache -a")
-
             sendLocalNotification(
                 title: "Dọn dẹp hoàn tất",
-                body: "Đã xóa thành công \(deletedCount) ứng dụng và dọn dẹp bộ nhớ đệm cache hệ thống."
+                body: "Đã xóa thành công \(deletedCount) ứng dụng và toàn bộ dữ liệu, bộ nhớ đệm cache."
             )
 
             if bgTask != .invalid {
@@ -327,6 +311,20 @@ struct ContentView: View {
                                     Text(app.id).font(.caption).foregroundColor(.gray)
                                 }
                                 Spacer()
+                                
+                                Button(action: {
+                                    if let dataPath = findDataContainerPath(for: app.id) {
+                                        openInFilza(path: dataPath)
+                                    } else if let bundlePath = app.bundleURL?.path {
+                                        openInFilza(path: bundlePath)
+                                    }
+                                }) {
+                                    Image(systemName: "folder.fill")
+                                        .foregroundColor(.orange)
+                                        .padding(.trailing, 8)
+                                }
+                                .buttonStyle(BorderedButtonStyle())
+
                                 Image(systemName: app.isSelected ? "checkmark.circle.fill" : "circle")
                                     .font(.title2)
                                     .foregroundColor(app.isSelected ? .blue : .gray)
@@ -367,14 +365,14 @@ struct ContentView: View {
             .alert(isPresented: $viewModel.showFilzaAlert) {
                 Alert(
                     title: Text("Yêu cầu Filza File Manager"),
-                    message: Text("Yêu cầu thiết bị phải cài đặt Filza File Manager để thực hiện chức năng xóa dữ liệu và bộ nhớ đệm ngầm."),
+                    message: Text("Yêu cầu thiết bị phải cài đặt Filza File Manager để kiểm tra và quản lý thư mục dữ liệu ngầm."),
                     dismissButton: .default(Text("Đã hiểu"))
                 )
             }
             .alert(isPresented: $viewModel.showNotificationPermissionAlert) {
                 Alert(
                     title: Text("Thông báo chạy nền"),
-                    message: Text("Bạn chưa cấp quyền thông báo. Tiến trình xóa vẫn chạy ngầm nhưng bạn sẽ không nhận được thông báo khi hoàn thành."),
+                    message: Text("Cần cấp quyền thông báo để ứng dụng gửi thông báo khi hoàn thành tiến trình xóa ngầm."),
                     dismissButton: .default(Text("Tiếp tục"))
                 )
             }

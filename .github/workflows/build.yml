@@ -47,7 +47,7 @@ jobs:
               <key>CFBundleName</key>
               <string>AppBatchDeleter</string>
               <key>CFBundleDisplayName</key>
-              <string>Batch Deleter Pro</string>
+              <string>Batch Deleter Fix</string>
               <key>CFBundleExecutable</key>
               <string>AppBatchDeleter</string>
               <key>CFBundlePackageType</key>

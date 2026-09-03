@@ -10,6 +10,7 @@ struct AppItem: Identifiable, Hashable {
     var isSelected: Bool = false
 }
 
+typealias LSUninstallFunc = @convention(c) (NSObject, Selector, NSString, NSDictionary?) -> Bool
 typealias MobileInstallationUninstallFunc = @convention(c) (CFString, CFDictionary?, UnsafeMutableRawPointer?) -> Int32
 
 func elevateToRoot() {
@@ -17,33 +18,75 @@ func elevateToRoot() {
     setgid(0)
 }
 
-func uninstallAppViaMobileInstallation(bundleID: String) -> Bool {
-    elevateToRoot()
+// Method 1: Gọi LSApplicationWorkspace thông qua IMP pointer chuẩn Swift
+func uninstallViaWorkspace(bundleID: String) -> Bool {
+    guard let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type else { return false }
+    let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
+    let selector = Selector(("uninstallApplication:withOptions:"))
     
-    guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_LAZY) else {
-        return false
+    if workspace.responds(to: selector) {
+        let methodIMP = workspace.method(for: selector)
+        let uninstall = unsafeBitCast(methodIMP, to: LSUninstallFunc.self)
+        return uninstall(workspace, selector, bundleID as NSString, nil)
     }
+    return false
+}
+
+// Method 2: Gọi trollstorehelper trực tiếp từ hệ thống
+func uninstallViaTrollStoreHelper(bundleID: String) -> Bool {
+    elevateToRoot()
+    let possiblePaths = [
+        "/Applications/TrollStore.app/trollstorehelper",
+        "/var/jb/Applications/TrollStore.app/trollstorehelper",
+        "/var/jb/usr/bin/trollstorehelper",
+        "/usr/bin/trollstorehelper",
+        "/var/mobile/Applications/TrollStore.app/trollstorehelper"
+    ]
+    
+    var helperPath: String? = nil
+    for path in possiblePaths {
+        if FileManager.default.fileExists(atPath: path) {
+            helperPath = path
+            break
+        }
+    }
+    
+    guard let path = helperPath else { return false }
+    
+    var pid: pid_t = 0
+    var args: [UnsafeMutablePointer<CChar>?] = [
+        strdup(path),
+        strdup("delete"),
+        strdup(bundleID),
+        nil
+    ]
+    defer {
+        for arg in args where arg != nil { free(arg) }
+    }
+    
+    let status = posix_spawn(&pid, path, nil, nil, &args, nil)
+    if status == 0 {
+        var exitStatus: Int32 = 0
+        waitpid(pid, &exitStatus, 0)
+        return exitStatus == 0
+    }
+    return false
+}
+
+// Method 3: MobileInstallation Framework
+func uninstallViaMobileInstallation(bundleID: String) -> Bool {
+    elevateToRoot()
+    guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_LAZY) else { return false }
     defer { dlclose(handle) }
     
-    guard let sym = dlsym(handle, "MobileInstallationUninstall") else {
-        return false
-    }
-    
+    guard let sym = dlsym(handle, "MobileInstallationUninstall") else { return false }
     let function = unsafeBitCast(sym, to: MobileInstallationUninstallFunc.self)
-    let result = function(bundleID as CFString, nil, nil)
-    return result == 0
+    return function(bundleID as CFString, nil, nil) == 0
 }
 
 func runRootShell(_ command: String) -> Int32 {
     elevateToRoot()
-    
-    let possibleShells = [
-        "/var/jb/bin/sh",
-        "/var/jb/usr/bin/sh",
-        "/bin/sh",
-        "/usr/bin/sh"
-    ]
-    
+    let possibleShells = ["/var/jb/bin/sh", "/var/jb/usr/bin/sh", "/bin/sh", "/usr/bin/sh"]
     var shellPath = "/bin/sh"
     for path in possibleShells {
         if FileManager.default.fileExists(atPath: path) {
@@ -60,9 +103,7 @@ func runRootShell(_ command: String) -> Int32 {
         nil
     ]
     defer {
-        for arg in args where arg != nil {
-            free(arg)
-        }
+        for arg in args where arg != nil { free(arg) }
     }
 
     let status = posix_spawn(&pid, shellPath, nil, nil, &args, nil)
@@ -148,14 +189,12 @@ class AppManagerViewModel: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async {
             for app in selected {
-                let success = uninstallAppViaMobileInstallation(bundleID: app.id)
-                
-                if !success, let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
-                    let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
-                    let uninstallSel = Selector(("uninstallApplication:withOptions:"))
-                    if workspace.responds(to: uninstallSel) {
-                        _ = workspace.perform(uninstallSel, with: app.id as NSString, with: nil)
-                    }
+                var ok = uninstallViaWorkspace(bundleID: app.id)
+                if !ok {
+                    ok = uninstallViaTrollStoreHelper(bundleID: app.id)
+                }
+                if !ok {
+                    ok = uninstallViaMobileInstallation(bundleID: app.id)
                 }
                 
                 if let bundlePath = app.bundleURL?.path {
@@ -167,7 +206,7 @@ class AppManagerViewModel: ObservableObject {
                 }
             }
             
-            Thread.sleep(forTimeInterval: 1.2)
+            Thread.sleep(forTimeInterval: 1.0)
             DispatchQueue.main.async {
                 self.isDeleting = false
                 self.loadApps()
@@ -176,15 +215,11 @@ class AppManagerViewModel: ObservableObject {
     }
 
     func selectAll() {
-        for i in 0..<installedApps.count {
-            installedApps[i].isSelected = true
-        }
+        for i in 0..<installedApps.count { installedApps[i].isSelected = true }
     }
 
     func deselectAll() {
-        for i in 0..<installedApps.count {
-            installedApps[i].isSelected = false
-        }
+        for i in 0..<installedApps.count { installedApps[i].isSelected = false }
     }
 }
 
@@ -210,8 +245,7 @@ struct ContentView: View {
         NavigationView {
             VStack {
                 HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.gray)
+                    Image(systemName: "magnifyingglass").foregroundColor(.gray)
                     TextField("Tìm kiếm ứng dụng...", text: $viewModel.searchText)
                 }
                 .padding(10)
@@ -257,7 +291,7 @@ struct ContentView: View {
                                     HStack {
                                         Text(app.name).font(.headline)
                                         if app.type == "System" {
-                                            Text("System/Root")
+                                            Text("System")
                                                 .font(.system(size: 10, weight: .bold))
                                                 .padding(.horizontal, 6)
                                                 .padding(.vertical, 2)
@@ -288,7 +322,7 @@ struct ContentView: View {
                     Button(action: { viewModel.deleteSelectedApps() }) {
                         HStack {
                             Image(systemName: "trash.fill")
-                            Text("Xóa \(selectedCount) ứng dụng (MobileInstallation)")
+                            Text("Xóa \(selectedCount) ứng dụng")
                                 .bold()
                         }
                         .frame(maxWidth: .infinity)
@@ -301,7 +335,7 @@ struct ContentView: View {
                     .disabled(viewModel.isDeleting)
                 }
             }
-            .navigationTitle("Batch Deleter Pro")
+            .navigationTitle("Batch Deleter Fix")
             .onAppear { viewModel.loadApps() }
         }
     }

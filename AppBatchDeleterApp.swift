@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import Darwin
+import UserNotifications
 
 struct AppItem: Identifiable, Hashable {
     let id: String
@@ -10,76 +11,43 @@ struct AppItem: Identifiable, Hashable {
     var isSelected: Bool = false
 }
 
-typealias LSUninstallMsgSend = @convention(c) (UnsafeMutableRawPointer, Selector, CFString, UnsafeMutableRawPointer?) -> Bool
-typealias MobileInstallationUninstallFunc = @convention(c) (CFString, CFDictionary?, UnsafeMutableRawPointer?) -> Int32
-
 func elevateToRoot() {
     setuid(0)
     setgid(0)
 }
 
-func uninstallViaWorkspace(bundleID: String) -> Bool {
-    guard let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type else { return false }
-    let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
-    let selector = Selector(("uninstallApplication:withOptions:"))
-    
-    if workspace.responds(to: selector) {
-        let methodIMP = workspace.method(for: selector)
-        let uninstall = unsafeBitCast(methodIMP, to: LSUninstallMsgSend.self)
-        let workspacePtr = Unmanaged.passUnretained(workspace).toOpaque()
-        return uninstall(workspacePtr, selector, bundleID as CFString, nil)
-    }
-    return false
-}
-
-func uninstallViaTrollStoreHelper(bundleID: String) -> Bool {
-    elevateToRoot()
-    let possiblePaths = [
-        "/Applications/TrollStore.app/trollstorehelper",
-        "/var/jb/Applications/TrollStore.app/trollstorehelper",
-        "/var/jb/usr/bin/trollstorehelper",
-        "/usr/bin/trollstorehelper",
-        "/var/mobile/Applications/TrollStore.app/trollstorehelper"
+func isFilzaInstalled() -> Bool {
+    let possibleFilzaPaths = [
+        "/Applications/Filza.app",
+        "/var/jb/Applications/Filza.app",
+        "/var/mobile/Applications/Filza.app",
+        "/var/containers/Bundle/Application/Filza.app"
     ]
-    
-    var helperPath: String? = nil
-    for path in possiblePaths {
+    for path in possibleFilzaPaths {
         if FileManager.default.fileExists(atPath: path) {
-            helperPath = path
-            break
+            return true
         }
     }
-    
-    guard let path = helperPath else { return false }
-    
-    var pid: pid_t = 0
-    var args: [UnsafeMutablePointer<CChar>?] = [
-        strdup(path),
-        strdup("delete"),
-        strdup(bundleID),
-        nil
-    ]
-    defer {
-        for arg in args where arg != nil { free(arg) }
-    }
-    
-    let status = posix_spawn(&pid, path, nil, nil, &args, nil)
-    if status == 0 {
-        var exitStatus: Int32 = 0
-        waitpid(pid, &exitStatus, 0)
-        return exitStatus == 0
+    if let url = URL(string: "filza://"), UIApplication.shared.canOpenURL(url) {
+        return true
     }
     return false
 }
 
-func uninstallViaMobileInstallation(bundleID: String) -> Bool {
-    elevateToRoot()
-    guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_LAZY) else { return false }
-    defer { dlclose(handle) }
+func findDataContainerPath(for bundleID: String) -> String? {
+    let baseContainers = "/var/mobile/Containers/Data/Application"
+    guard let subdirs = try? FileManager.default.contentsOfDirectory(atPath: baseContainers) else { return nil }
     
-    guard let sym = dlsym(handle, "MobileInstallationUninstall") else { return false }
-    let function = unsafeBitCast(sym, to: MobileInstallationUninstallFunc.self)
-    return function(bundleID as CFString, nil, nil) == 0
+    for sub in subdirs {
+        let metadataPath = "\(baseContainers)/\(sub)/.com.apple.mobile_container_manager.metadata.plist"
+        if FileManager.default.fileExists(atPath: metadataPath),
+           let dict = NSDictionary(contentsOfFile: metadataPath),
+           let identifier = dict["MCMMetadataIdentifier"] as? String,
+           identifier == bundleID {
+            return "\(baseContainers)/\(sub)"
+        }
+    }
+    return nil
 }
 
 func runRootShell(_ command: String) -> Int32 {
@@ -113,11 +81,37 @@ func runRootShell(_ command: String) -> Int32 {
     return status
 }
 
+func sendLocalNotification(title: String, body: String) {
+    let content = UNMutableNotificationContent()
+    content.title = title
+    content.body = body
+    content.sound = .default
+
+    let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+    UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+}
+
 class AppManagerViewModel: ObservableObject {
     @Published var installedApps: [AppItem] = []
     @Published var searchText: String = ""
     @Published var isDeleting: Bool = false
     @Published var isLoading: Bool = true
+    @Published var showFilzaAlert: Bool = false
+    @Published var showNotificationPermissionAlert: Bool = false
+
+    func checkFilzaStatus() {
+        if !isFilzaInstalled() {
+            showFilzaAlert = true
+        }
+    }
+
+    func requestNotificationPermission(completion: @escaping (Bool) -> Void) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            DispatchQueue.main.async {
+                completion(granted)
+            }
+        }
+    }
 
     func loadApps() {
         DispatchQueue.global(qos: .userInitiated).async {
@@ -179,32 +173,64 @@ class AppManagerViewModel: ObservableObject {
         }
     }
 
-    func deleteSelectedApps() {
+    func startBatchDeleteProcess() {
+        if !isFilzaInstalled() {
+            showFilzaAlert = true
+            return
+        }
+
+        requestNotificationPermission { granted in
+            if !granted {
+                self.showNotificationPermissionAlert = true
+            }
+            self.executeBackgroundDeletion()
+        }
+    }
+
+    private func executeBackgroundDeletion() {
         let selected = installedApps.filter { $0.isSelected }
         guard !selected.isEmpty else { return }
 
         isDeleting = true
 
+        var bgTask: UIBackgroundTaskIdentifier = .invalid
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "FilzaBatchDeleteTask") {
+            UIApplication.shared.endBackgroundTask(bgTask)
+            bgTask = .invalid
+        }
+
         DispatchQueue.global(qos: .userInitiated).async {
+            var deletedCount = 0
+
             for app in selected {
-                var ok = uninstallViaWorkspace(bundleID: app.id)
-                if !ok {
-                    ok = uninstallViaTrollStoreHelper(bundleID: app.id)
+                if let dataPath = findDataContainerPath(for: app.id) {
+                    _ = runRootShell("rm -rf \"\(dataPath)\"")
                 }
-                if !ok {
-                    ok = uninstallViaMobileInstallation(bundleID: app.id)
-                }
-                
+
                 if let bundlePath = app.bundleURL?.path {
-                    let rmCmd = "rm -rf \"\(bundlePath)\""
-                    _ = runRootShell(rmCmd)
-                    
-                    let uicacheCmd = "uicache -u \"\(bundlePath)\" || uicache -a || /var/jb/usr/bin/uicache -a"
-                    _ = runRootShell(uicacheCmd)
+                    _ = runRootShell("rm -rf \"\(bundlePath)\"")
+                    _ = runRootShell("uicache -u \"\(bundlePath)\" || uicache -a || /var/jb/usr/bin/uicache -a")
+                } else {
+                    _ = runRootShell("uicache -u \"\(app.id)\" || uicache -a")
                 }
+
+                _ = runRootShell("trollstorehelper delete \"\(app.id)\" || /var/jb/usr/bin/trollstorehelper delete \"\(app.id)\"")
+
+                deletedCount += 1
             }
-            
-            Thread.sleep(forTimeInterval: 1.0)
+
+            _ = runRootShell("uicache -a || /var/jb/usr/bin/uicache -a")
+
+            sendLocalNotification(
+                title: "Dọn dẹp hoàn tất",
+                body: "Đã xóa thành công \(deletedCount) ứng dụng và dọn dẹp bộ nhớ đệm cache hệ thống."
+            )
+
+            if bgTask != .invalid {
+                UIApplication.shared.endBackgroundTask(bgTask)
+                bgTask = .invalid
+            }
+
             DispatchQueue.main.async {
                 self.isDeleting = false
                 self.loadApps()
@@ -317,15 +343,15 @@ struct ContentView: View {
                 }
 
                 if selectedCount > 0 {
-                    Button(action: { viewModel.deleteSelectedApps() }) {
+                    Button(action: { viewModel.startBatchDeleteProcess() }) {
                         HStack {
                             Image(systemName: "trash.fill")
-                            Text("Xóa \(selectedCount) ứng dụng")
+                            Text(viewModel.isDeleting ? "Đang chạy ngầm xóa..." : "Xóa \(selectedCount) ứng dụng")
                                 .bold()
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(Color.red)
+                        .background(viewModel.isDeleting ? Color.gray : Color.red)
                         .foregroundColor(.white)
                         .cornerRadius(12)
                     }
@@ -333,14 +359,44 @@ struct ContentView: View {
                     .disabled(viewModel.isDeleting)
                 }
             }
-            .navigationTitle("Batch Deleter Pro")
-            .onAppear { viewModel.loadApps() }
+            .navigationTitle("Filza Batch Deleter")
+            .onAppear {
+                viewModel.checkFilzaStatus()
+                viewModel.loadApps()
+            }
+            .alert(isPresented: $viewModel.showFilzaAlert) {
+                Alert(
+                    title: Text("Yêu cầu Filza File Manager"),
+                    message: Text("Yêu cầu thiết bị phải cài đặt Filza File Manager để thực hiện chức năng xóa dữ liệu và bộ nhớ đệm ngầm."),
+                    dismissButton: .default(Text("Đã hiểu"))
+                )
+            }
+            .alert(isPresented: $viewModel.showNotificationPermissionAlert) {
+                Alert(
+                    title: Text("Thông báo chạy nền"),
+                    message: Text("Bạn chưa cấp quyền thông báo. Tiến trình xóa vẫn chạy ngầm nhưng bạn sẽ không nhận được thông báo khi hoàn thành."),
+                    dismissButton: .default(Text("Tiếp tục"))
+                )
+            }
         }
+    }
+}
+
+class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .badge])
     }
 }
 
 @main
 struct AppBatchDeleterApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ContentView()

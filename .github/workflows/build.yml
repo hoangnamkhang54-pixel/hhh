@@ -14,13 +14,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install ldid
-        env:
-          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
-        run: |
-          brew untap aws/tap || true
-          brew install ldid || true
-
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
@@ -28,9 +21,6 @@ jobs:
         run: |
           set -e
           mkdir -p Payload/AppBatchDeleter.app
-          
-          cp AppIcon60x60@2x.png Payload/AppBatchDeleter.app/
-          cp AppIcon60x60@3x.png Payload/AppBatchDeleter.app/
           
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           
@@ -46,7 +36,7 @@ jobs:
 
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.plist">
           <plist version="1.0">
           <dict>
               <key>CFBundleIdentifier</key>
@@ -54,7 +44,7 @@ jobs:
               <key>CFBundleName</key>
               <string>AppBatchDeleter</string>
               <key>CFBundleDisplayName</key>
-              <string>Batch Deleter Pro</string>
+              <string>Filza Deleter</string>
               <key>CFBundleExecutable</key>
               <string>AppBatchDeleter</string>
               <key>CFBundlePackageType</key>
@@ -65,22 +55,15 @@ jobs:
               <string>1</string>
               <key>MinimumOSVersion</key>
               <string>15.0</string>
-              <key>CFBundleIconFiles</key>
+              <key>LSApplicationQueriesSchemes</key>
               <array>
-                  <string>AppIcon60x60</string>
+                  <string>filza</string>
               </array>
-              <key>CFBundleIcons</key>
-              <dict>
-                  <key>CFBundlePrimaryIcon</key>
-                  <dict>
-                      <key>CFBundleIconFiles</key>
-                      <array>
-                          <string>AppIcon60x60</string>
-                      </array>
-                      <key>CFBundleIconName</key>
-                      <string>AppIcon</string>
-                  </dict>
-              </dict>
+              <key>UIBackgroundModes</key>
+              <array>
+                  <string>fetch</string>
+                  <string>processing</string>
+              </array>
               <key>UILaunchScreen</key>
               <dict/>
           </dict>
@@ -93,7 +76,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-${{ github.run_number }}
-          name: AppBatchDeleter Build #${{ github.run_number }}
+          name: AppBatchDeleter Filza Engine Build #${{ github.run_number }}
           files: AppBatchDeleter.ipa
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

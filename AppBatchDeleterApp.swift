@@ -34,22 +34,6 @@ func isFilzaInstalled() -> Bool {
     return false
 }
 
-func findDataContainerPath(for bundleID: String) -> String? {
-    let baseContainers = "/var/mobile/Containers/Data/Application"
-    guard let subdirs = try? FileManager.default.contentsOfDirectory(atPath: baseContainers) else { return nil }
-    
-    for sub in subdirs {
-        let metadataPath = "\(baseContainers)/\(sub)/.com.apple.mobile_container_manager.metadata.plist"
-        if FileManager.default.fileExists(atPath: metadataPath),
-           let dict = NSDictionary(contentsOfFile: metadataPath),
-           let identifier = dict["MCMMetadataIdentifier"] as? String,
-           identifier == bundleID {
-            return "\(baseContainers)/\(sub)"
-        }
-    }
-    return nil
-}
-
 func openInFilza(path: String) {
     let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
     if let url = URL(string: "filza://view\(encodedPath)") {
@@ -57,7 +41,68 @@ func openInFilza(path: String) {
     }
 }
 
-func runExecutable(path: String, args: [String]) -> Int32 {
+func removePathRecursively(_ path: String) {
+    elevateToRoot()
+    var isDir: ObjCBool = false
+    if FileManager.default.fileExists(atPath: path, isDirectory: &isDir) {
+        if isDir.boolValue {
+            if let subItems = try? FileManager.default.contentsOfDirectory(atPath: path) {
+                for item in subItems {
+                    let subPath = (path as NSString).appendingPathComponent(item)
+                    removePathRecursively(subPath)
+                }
+            }
+            _ = rmdir(path)
+        } else {
+            _ = unlink(path)
+        }
+    }
+}
+
+func findAllContainerPaths(for bundleID: String) -> [String] {
+    var paths: [String] = []
+    let containerBases = [
+        "/var/mobile/Containers/Data/Application",
+        "/var/mobile/Containers/Shared/AppGroup",
+        "/var/mobile/Containers/Data/PluginKitPlugin"
+    ]
+    
+    for base in containerBases {
+        guard let subdirs = try? FileManager.default.contentsOfDirectory(atPath: base) else { continue }
+        for sub in subdirs {
+            let fullFolder = "\(base)/\(sub)"
+            let metadataPath = "\(fullFolder)/.com.apple.mobile_container_manager.metadata.plist"
+            if FileManager.default.fileExists(atPath: metadataPath),
+               let dict = NSDictionary(contentsOfFile: metadataPath),
+               let identifier = dict["MCMMetadataIdentifier"] as? String,
+               identifier == bundleID {
+                paths.append(fullFolder)
+            }
+        }
+    }
+    return paths
+}
+
+func findBinary(_ name: String) -> String? {
+    let candidates = [
+        "/var/jb/usr/bin/\(name)",
+        "/usr/bin/\(name)",
+        "/var/jb/bin/\(name)",
+        "/bin/\(name)",
+        "/Applications/TrollStore.app/\(name)",
+        "/var/containers/Bundle/Application/TrollStore.app/\(name)",
+        "/var/apps/TrollStore.app/\(name)"
+    ]
+    for path in candidates {
+        if FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+    }
+    return nil
+}
+
+func runBinary(_ path: String, args: [String]) -> Int32 {
+    elevateToRoot()
     var pid: pid_t = 0
     var cArgs = [strdup(path)] + args.map { strdup($0) } + [nil]
     defer {
@@ -72,80 +117,34 @@ func runExecutable(path: String, args: [String]) -> Int32 {
     return status
 }
 
-typealias MobileInstallationUninstallFunc = @convention(c) (CFString, CFDictionary?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
-
-func uninstallViaMobileInstallation(bundleID: String) -> Bool {
-    guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_NOW) else {
-        return false
-    }
-    defer { dlclose(handle) }
-    
-    guard let sym = dlsym(handle, "MobileInstallationUninstall") else {
-        return false
-    }
-    
-    let function = unsafeBitCast(sym, to: MobileInstallationUninstallFunc.self)
-    let result = function(bundleID as CFString, nil, nil, nil)
-    return result == 0
-}
-
-func forceUninstallApp(app: AppItem) {
+func uninstallAppCompletely(app: AppItem) {
     elevateToRoot()
 
-    // 1. Xóa thư mục dữ liệu Data Container trước
-    if let dataPath = findDataContainerPath(for: app.id) {
-        try? FileManager.default.removeItem(atPath: dataPath)
+    // 1. Dùng trollstorehelper xóa chính thức để gỡ đăng ký khỏi hệ thống
+    if let tsPath = findBinary("trollstorehelper") {
+        _ = runBinary(tsPath, args: ["delete", app.id])
     }
 
-    // 2. Gỡ ứng dụng thông qua MobileInstallation Private Framework
-    var success = uninstallViaMobileInstallation(bundleID: app.id)
-
-    // 3. Nếu không thành công, dùng trollstorehelper xóa chính thức
-    if !success {
-        let possibleTSHelpers = [
-            "/var/jb/usr/bin/trollstorehelper",
-            "/usr/bin/trollstorehelper",
-            "/Applications/TrollStore.app/trollstorehelper",
-            "/var/containers/Bundle/Application/TrollStore.app/trollstorehelper"
-        ]
-        for helper in possibleTSHelpers {
-            if FileManager.default.fileExists(atPath: helper) {
-                let status = runExecutable(path: helper, args: ["delete", app.id])
-                if status == 0 {
-                    success = true
-                    break
-                }
-            }
-        }
+    // 2. Xóa tất cả các thùng chứa dữ liệu Data Containers, App Groups, Plugins
+    let containerPaths = findAllContainerPaths(for: app.id)
+    for cPath in containerPaths {
+        removePathRecursively(cPath)
     }
 
-    // 4. Dùng LSApplicationWorkspace gỡ bổ sung
-    if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
-        let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
-        let uninstallSel = Selector(("uninstallApplication:withOptions:"))
-        if workspace.responds(to: uninstallSel) {
-            workspace.perform(uninstallSel, with: app.id, with: nil)
-        }
+    // 3. Xóa thư mục Bundle nếu còn sót
+    if let bundlePath = app.bundleURL?.path {
+        removePathRecursively(bundlePath)
     }
 
-    // 5. Nếu vẫn còn thư mục Bundle thì tiến hành xóa dọn dẹp
-    if let bundlePath = app.bundleURL?.path, FileManager.default.fileExists(atPath: bundlePath) {
-        try? FileManager.default.removeItem(atPath: bundlePath)
-    }
+    // 4. Xóa Preferences & Caches của app
+    removePathRecursively("/var/mobile/Library/Preferences/\(app.id).plist")
+    removePathRecursively("/var/mobile/Library/Caches/\(app.id)")
+    removePathRecursively("/var/mobile/Library/Saved Application State/\(app.id).savedState")
 
-    // 6. Làm mới Icon Cache để làm sạch màn hình chính
-    let possibleUICache = [
-        "/var/jb/usr/bin/uicache",
-        "/usr/bin/uicache",
-        "/var/jb/bin/uicache",
-        "/bin/uicache"
-    ]
-    for uicache in possibleUICache {
-        if FileManager.default.fileExists(atPath: uicache) {
-            _ = runExecutable(path: uicache, args: ["-u", app.id])
-            _ = runExecutable(path: uicache, args: ["-a"])
-            break
-        }
+    // 5. Làm mới lại bộ nhớ đệm Icon Cache (uicache)
+    if let uicachePath = findBinary("uicache") {
+        _ = runBinary(uicachePath, args: ["-u", app.id])
+        _ = runBinary(uicachePath, args: ["-a"])
     }
 }
 
@@ -163,6 +162,7 @@ class AppManagerViewModel: ObservableObject {
     @Published var installedApps: [AppItem] = []
     @Published var searchText: String = ""
     @Published var isDeleting: Bool = false
+    @Published var statusText: String = ""
     @Published var isLoading: Bool = true
     @Published var showFilzaAlert: Bool = false
     @Published var showNotificationPermissionAlert: Bool = false
@@ -209,7 +209,7 @@ class AppManagerViewModel: ObservableObject {
                         if let bundleID = app.perform(idSel)?.takeUnretainedValue() as? String,
                            let localizedName = app.perform(nameSel)?.takeUnretainedValue() as? String {
                             
-                            if !bundleID.isEmpty && !localizedName.isEmpty {
+                            if !bundleID.isEmpty && !localizedName.isEmpty && bundleID != "com.hoangnamkhang.AppBatchDeleter" {
                                 var appType = "User"
                                 if app.responds(to: typeSel), let typeStr = app.perform(typeSel)?.takeUnretainedValue() as? String {
                                     appType = typeStr
@@ -260,6 +260,7 @@ class AppManagerViewModel: ObservableObject {
 
         DispatchQueue.main.async {
             self.isDeleting = true
+            self.statusText = "Đang chuẩn bị..."
         }
 
         var bgTask: UIBackgroundTaskIdentifier = .invalid
@@ -270,15 +271,24 @@ class AppManagerViewModel: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async {
             var deletedCount = 0
+            let total = selected.count
 
-            for app in selected {
-                forceUninstallApp(app: app)
+            for (index, app) in selected.enumerated() {
+                DispatchQueue.main.async {
+                    self.statusText = "Đang xóa (\(index + 1)/\(total)): \(app.name)"
+                }
+                
+                uninstallAppCompletely(app: app)
                 deletedCount += 1
+            }
+
+            if let uicachePath = findBinary("uicache") {
+                _ = runBinary(uicachePath, args: ["-a"])
             }
 
             sendLocalNotification(
                 title: "Dọn dẹp hoàn tất",
-                body: "Đã xóa thành công \(deletedCount) ứng dụng và dọn dẹp toàn bộ dữ liệu, bộ nhớ đệm."
+                body: "Đã xóa hoàn toàn \(deletedCount) ứng dụng và dọn dẹp toàn bộ dữ liệu, cache hệ thống."
             )
 
             if bgTask != .invalid {
@@ -288,6 +298,7 @@ class AppManagerViewModel: ObservableObject {
 
             DispatchQueue.main.async {
                 self.isDeleting = false
+                self.statusText = ""
                 self.loadApps()
             }
         }
@@ -384,15 +395,16 @@ struct ContentView: View {
                                 Spacer()
                                 
                                 Button(action: {
-                                    if let dataPath = findDataContainerPath(for: app.id) {
-                                        openInFilza(path: dataPath)
+                                    let containers = findAllContainerPaths(for: app.id)
+                                    if let firstContainer = containers.first {
+                                        openInFilza(path: firstContainer)
                                     } else if let bundlePath = app.bundleURL?.path {
                                         openInFilza(path: bundlePath)
                                     }
                                 }) {
                                     Image(systemName: "folder.fill")
                                         .foregroundColor(.orange)
-                                        .padding(.trailing, 8)
+                                        .padding(.trailing, 4)
                                 }
                                 .buttonStyle(BorderedButtonStyle())
 
@@ -412,20 +424,27 @@ struct ContentView: View {
                 }
 
                 if selectedCount > 0 {
-                    Button(action: { viewModel.startBatchDeleteProcess() }) {
-                        HStack {
-                            Image(systemName: "trash.fill")
-                            Text(viewModel.isDeleting ? "Đang chạy ngầm xóa..." : "Xóa \(selectedCount) ứng dụng")
-                                .bold()
+                    VStack(spacing: 6) {
+                        if viewModel.isDeleting {
+                            Text(viewModel.statusText)
+                                .font(.caption)
+                                .foregroundColor(.blue)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(viewModel.isDeleting ? Color.gray : Color.red)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
+                        Button(action: { viewModel.startBatchDeleteProcess() }) {
+                            HStack {
+                                Image(systemName: "trash.fill")
+                                Text(viewModel.isDeleting ? "Đang xử lý dọn dẹp..." : "Xóa \(selectedCount) ứng dụng")
+                                    .bold()
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(viewModel.isDeleting ? Color.gray : Color.red)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                        }
+                        .disabled(viewModel.isDeleting)
                     }
                     .padding()
-                    .disabled(viewModel.isDeleting)
                 }
             }
             .navigationTitle("Filza Batch Deleter")
@@ -435,15 +454,15 @@ struct ContentView: View {
             }
             .alert(isPresented: $viewModel.showFilzaAlert) {
                 Alert(
-                    title: Text("Yêu cầu Filza File Manager"),
-                    message: Text("Yêu cầu thiết bị phải cài đặt Filza File Manager để kiểm tra và quản lý thư mục dữ liệu ngầm."),
+                    title: Text("Cảnh báo Filza"),
+                    message: Text("Yêu cầu thiết bị cài đặt Filza File Manager để quản lý mở trực tiếp thư mục dữ liệu."),
                     dismissButton: .default(Text("Đã hiểu"))
                 )
             }
             .alert(isPresented: $viewModel.showNotificationPermissionAlert) {
                 Alert(
-                    title: Text("Thông báo chạy nền"),
-                    message: Text("Cần cấp quyền thông báo để ứng dụng gửi thông báo khi hoàn thành tiến trình xóa ngầm."),
+                    title: Text("Cấp quyền thông báo"),
+                    message: Text("Vui lòng cho phép ứng dụng gửi thông báo khi hoàn thành tiến trình dọn dẹp ngầm."),
                     dismissButton: .default(Text("Tiếp tục"))
                 )
             }

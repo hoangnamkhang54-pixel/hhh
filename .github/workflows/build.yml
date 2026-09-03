@@ -14,17 +14,36 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install ldid
-        run: brew install ldid
+      - name: Install ldid and python dependencies
+        run: |
+          brew install ldid
+          python3 -m pip install pillow
 
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Bien dich va Ky Entitlements
+      - name: Bien dich, Tao Icon va Ky Entitlements
         run: |
           set -e
           mkdir -p Payload/AppBatchDeleter.app
           
+          # 1. Sinh file App Icon chuẩn 180x180 px
+          python3 -c "
+          from PIL import Image, ImageDraw
+          img = Image.new('RGB', (180, 180), color='#1C1C1E')
+          draw = ImageDraw.Draw(img)
+          draw.rounded_rectangle([10, 10, 170, 170], radius=36, fill='#FF3B30')
+          draw.rectangle([55, 75, 125, 135], fill='#FFFFFF')
+          draw.rectangle([50, 60, 130, 70], fill='#FFFFFF')
+          draw.rectangle([75, 50, 105, 58], fill='#FFFFFF')
+          draw.rectangle([70, 85, 76, 125], fill='#FF3B30')
+          draw.rectangle([87, 85, 93, 125], fill='#FF3B30')
+          draw.rectangle([104, 85, 110, 125], fill='#FF3B30')
+          img.save('Payload/AppBatchDeleter.app/AppIcon60x60@3x.png')
+          img.save('Payload/AppBatchDeleter.app/AppIcon.png')
+          "
+
+          # 2. Biên dịch file thực thi Swift
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           
           swiftc AppBatchDeleterApp.swift \
@@ -35,8 +54,10 @@ jobs:
           
           chmod +x Payload/AppBatchDeleter.app/AppBatchDeleter
 
+          # 3. Ký Entitlements root
           ldid -SEntitlements.plist Payload/AppBatchDeleter.app/AppBatchDeleter
 
+          # 4. Ghi cấu hình Info.plist bao gồm khai báo AppIcon
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.plist">
@@ -58,6 +79,13 @@ jobs:
               <string>1</string>
               <key>MinimumOSVersion</key>
               <string>15.0</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon.png</string>
+              <key>CFBundleIconFiles</key>
+              <array>
+                  <string>AppIcon60x60@3x.png</string>
+                  <string>AppIcon.png</string>
+              </array>
               <key>LSApplicationQueriesSchemes</key>
               <array>
                   <string>filza</string>
@@ -79,7 +107,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-${{ github.run_number }}
-          name: AppBatchDeleter MobileInstallation Engine Build #${{ github.run_number }}
+          name: AppBatchDeleter Full Clean Engine Build #${{ github.run_number }}
           files: AppBatchDeleter.ipa
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -57,6 +57,98 @@ func openInFilza(path: String) {
     }
 }
 
+func runExecutable(path: String, args: [String]) -> Int32 {
+    var pid: pid_t = 0
+    var cArgs = [strdup(path)] + args.map { strdup($0) } + [nil]
+    defer {
+        for ptr in cArgs where ptr != nil { free(ptr) }
+    }
+    let status = posix_spawn(&pid, path, nil, nil, &cArgs, nil)
+    if status == 0 {
+        var exitStatus: Int32 = 0
+        waitpid(pid, &exitStatus, 0)
+        return exitStatus
+    }
+    return status
+}
+
+typealias MobileInstallationUninstallFunc = @convention(c) (CFString, CFDictionary?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+
+func uninstallViaMobileInstallation(bundleID: String) -> Bool {
+    guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_NOW) else {
+        return false
+    }
+    defer { dlclose(handle) }
+    
+    guard let sym = dlsym(handle, "MobileInstallationUninstall") else {
+        return false
+    }
+    
+    let function = unsafeBitCast(sym, to: MobileInstallationUninstallFunc.self)
+    let result = function(bundleID as CFString, nil, nil, nil)
+    return result == 0
+}
+
+func forceUninstallApp(app: AppItem) {
+    elevateToRoot()
+
+    // 1. Xóa thư mục dữ liệu Data Container trước
+    if let dataPath = findDataContainerPath(for: app.id) {
+        try? FileManager.default.removeItem(atPath: dataPath)
+    }
+
+    // 2. Gỡ ứng dụng thông qua MobileInstallation Private Framework
+    var success = uninstallViaMobileInstallation(bundleID: app.id)
+
+    // 3. Nếu không thành công, dùng trollstorehelper xóa chính thức
+    if !success {
+        let possibleTSHelpers = [
+            "/var/jb/usr/bin/trollstorehelper",
+            "/usr/bin/trollstorehelper",
+            "/Applications/TrollStore.app/trollstorehelper",
+            "/var/containers/Bundle/Application/TrollStore.app/trollstorehelper"
+        ]
+        for helper in possibleTSHelpers {
+            if FileManager.default.fileExists(atPath: helper) {
+                let status = runExecutable(path: helper, args: ["delete", app.id])
+                if status == 0 {
+                    success = true
+                    break
+                }
+            }
+        }
+    }
+
+    // 4. Dùng LSApplicationWorkspace gỡ bổ sung
+    if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
+        let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
+        let uninstallSel = Selector(("uninstallApplication:withOptions:"))
+        if workspace.responds(to: uninstallSel) {
+            workspace.perform(uninstallSel, with: app.id, with: nil)
+        }
+    }
+
+    // 5. Nếu vẫn còn thư mục Bundle thì tiến hành xóa dọn dẹp
+    if let bundlePath = app.bundleURL?.path, FileManager.default.fileExists(atPath: bundlePath) {
+        try? FileManager.default.removeItem(atPath: bundlePath)
+    }
+
+    // 6. Làm mới Icon Cache để làm sạch màn hình chính
+    let possibleUICache = [
+        "/var/jb/usr/bin/uicache",
+        "/usr/bin/uicache",
+        "/var/jb/bin/uicache",
+        "/bin/uicache"
+    ]
+    for uicache in possibleUICache {
+        if FileManager.default.fileExists(atPath: uicache) {
+            _ = runExecutable(path: uicache, args: ["-u", app.id])
+            _ = runExecutable(path: uicache, args: ["-a"])
+            break
+        }
+    }
+}
+
 func sendLocalNotification(title: String, body: String) {
     let content = UNMutableNotificationContent()
     content.title = title
@@ -177,37 +269,16 @@ class AppManagerViewModel: ObservableObject {
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            elevateToRoot()
             var deletedCount = 0
 
             for app in selected {
-                if let dataPath = findDataContainerPath(for: app.id) {
-                    try? FileManager.default.removeItem(atPath: dataPath)
-                }
-
-                if let bundlePath = app.bundleURL?.path {
-                    try? FileManager.default.removeItem(atPath: bundlePath)
-                }
-
-                if let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type {
-                    let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
-                    let uninstallSel = Selector(("uninstallApplication:withOptions:"))
-                    if workspace.responds(to: uninstallSel) {
-                        workspace.perform(uninstallSel, with: app.id, with: nil)
-                    } else {
-                        let uninstallSel2 = Selector(("uninstallApplication:"))
-                        if workspace.responds(to: uninstallSel2) {
-                            workspace.perform(uninstallSel2, with: app.id)
-                        }
-                    }
-                }
-
+                forceUninstallApp(app: app)
                 deletedCount += 1
             }
 
             sendLocalNotification(
                 title: "Dọn dẹp hoàn tất",
-                body: "Đã xóa thành công \(deletedCount) ứng dụng và toàn bộ dữ liệu, bộ nhớ đệm cache."
+                body: "Đã xóa thành công \(deletedCount) ứng dụng và dọn dẹp toàn bộ dữ liệu, bộ nhớ đệm."
             )
 
             if bgTask != .invalid {

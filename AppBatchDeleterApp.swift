@@ -10,7 +10,7 @@ struct AppItem: Identifiable, Hashable {
     var isSelected: Bool = false
 }
 
-typealias LSUninstallFunc = @convention(c) (NSObject, Selector, NSString, NSDictionary?) -> Bool
+typealias LSUninstallMsgSend = @convention(c) (UnsafeMutableRawPointer, Selector, CFString, UnsafeMutableRawPointer?) -> Bool
 typealias MobileInstallationUninstallFunc = @convention(c) (CFString, CFDictionary?, UnsafeMutableRawPointer?) -> Int32
 
 func elevateToRoot() {
@@ -18,7 +18,6 @@ func elevateToRoot() {
     setgid(0)
 }
 
-// Method 1: Gọi LSApplicationWorkspace thông qua IMP pointer chuẩn Swift
 func uninstallViaWorkspace(bundleID: String) -> Bool {
     guard let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type else { return false }
     let workspace = workspaceClass.perform(Selector(("defaultWorkspace"))).takeUnretainedValue()
@@ -26,13 +25,13 @@ func uninstallViaWorkspace(bundleID: String) -> Bool {
     
     if workspace.responds(to: selector) {
         let methodIMP = workspace.method(for: selector)
-        let uninstall = unsafeBitCast(methodIMP, to: LSUninstallFunc.self)
-        return uninstall(workspace, selector, bundleID as NSString, nil)
+        let uninstall = unsafeBitCast(methodIMP, to: LSUninstallMsgSend.self)
+        let workspacePtr = Unmanaged.passUnretained(workspace).toOpaque()
+        return uninstall(workspacePtr, selector, bundleID as CFString, nil)
     }
     return false
 }
 
-// Method 2: Gọi trollstorehelper trực tiếp từ hệ thống
 func uninstallViaTrollStoreHelper(bundleID: String) -> Bool {
     elevateToRoot()
     let possiblePaths = [
@@ -73,7 +72,6 @@ func uninstallViaTrollStoreHelper(bundleID: String) -> Bool {
     return false
 }
 
-// Method 3: MobileInstallation Framework
 func uninstallViaMobileInstallation(bundleID: String) -> Bool {
     elevateToRoot()
     guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_LAZY) else { return false }
@@ -335,7 +333,7 @@ struct ContentView: View {
                     .disabled(viewModel.isDeleting)
                 }
             }
-            .navigationTitle("Batch Deleter Fix")
+            .navigationTitle("Batch Deleter Pro")
             .onAppear { viewModel.loadApps() }
         }
     }

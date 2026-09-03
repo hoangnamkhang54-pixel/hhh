@@ -4,6 +4,9 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -31,7 +34,11 @@ jobs:
           
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           
-          swiftc AppBatchDeleterApp.swift             -parse-as-library             -target arm64-apple-ios15.0             -sdk "$SDK_PATH"             -o Payload/AppBatchDeleter.app/AppBatchDeleter
+          swiftc AppBatchDeleterApp.swift \
+            -parse-as-library \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK_PATH" \
+            -o Payload/AppBatchDeleter.app/AppBatchDeleter
           
           chmod +x Payload/AppBatchDeleter.app/AppBatchDeleter
 
@@ -82,9 +89,11 @@ jobs:
 
           zip -r AppBatchDeleter.ipa Payload
 
-      - name: Tai file IPA len Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: AppBatchDeleter-IPA
-          path: AppBatchDeleter.ipa
-          if-no-files-found: error
+          tag_name: release-${{ github.run_number }}
+          name: AppBatchDeleter Build #${{ github.run_number }}
+          files: AppBatchDeleter.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

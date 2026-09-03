@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import Foundation
 import Darwin
 import UserNotifications
@@ -120,28 +121,23 @@ func runBinary(_ path: String, args: [String]) -> Int32 {
 func uninstallAppCompletely(app: AppItem) {
     elevateToRoot()
 
-    // 1. Dùng trollstorehelper xóa chính thức để gỡ đăng ký khỏi hệ thống
     if let tsPath = findBinary("trollstorehelper") {
         _ = runBinary(tsPath, args: ["delete", app.id])
     }
 
-    // 2. Xóa tất cả các thùng chứa dữ liệu Data Containers, App Groups, Plugins
     let containerPaths = findAllContainerPaths(for: app.id)
     for cPath in containerPaths {
         removePathRecursively(cPath)
     }
 
-    // 3. Xóa thư mục Bundle nếu còn sót
     if let bundlePath = app.bundleURL?.path {
         removePathRecursively(bundlePath)
     }
 
-    // 4. Xóa Preferences & Caches của app
     removePathRecursively("/var/mobile/Library/Preferences/\(app.id).plist")
     removePathRecursively("/var/mobile/Library/Caches/\(app.id)")
     removePathRecursively("/var/mobile/Library/Saved Application State/\(app.id).savedState")
 
-    // 5. Làm mới lại bộ nhớ đệm Icon Cache (uicache)
     if let uicachePath = findBinary("uicache") {
         _ = runBinary(uicachePath, args: ["-u", app.id])
         _ = runBinary(uicachePath, args: ["-a"])

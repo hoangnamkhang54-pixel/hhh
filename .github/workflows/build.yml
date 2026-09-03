@@ -14,10 +14,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install ldid and python dependencies
+      - name: Install ldid
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
-          brew install ldid
-          python3 -m pip install pillow
+          brew install ldid || {
+            sudo curl -sSL -o /usr/local/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macos_x86_64
+            sudo chmod +x /usr/local/bin/ldid
+          }
 
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
@@ -27,25 +33,40 @@ jobs:
           set -e
           mkdir -p Payload/AppBatchDeleter.app
           
-          # 1. Sinh file App Icon chuẩn 180x180 px
+          # 1. Sinh file App Icon chuẩn bằng Python thuần (zlib + struct, không phụ thuộc pip)
           python3 -c "
-          from PIL import Image, ImageDraw
-          img = Image.new('RGB', (180, 180), color='#1C1C1E')
-          draw = ImageDraw.Draw(img)
-          draw.rounded_rectangle([10, 10, 170, 170], radius=36, fill='#FF3B30')
-          draw.rectangle([55, 75, 125, 135], fill='#FFFFFF')
-          draw.rectangle([50, 60, 130, 70], fill='#FFFFFF')
-          draw.rectangle([75, 50, 105, 58], fill='#FFFFFF')
-          draw.rectangle([70, 85, 76, 125], fill='#FF3B30')
-          draw.rectangle([87, 85, 93, 125], fill='#FF3B30')
-          draw.rectangle([104, 85, 110, 125], fill='#FF3B30')
-          img.save('Payload/AppBatchDeleter.app/AppIcon60x60@3x.png')
-          img.save('Payload/AppBatchDeleter.app/AppIcon.png')
+          import zlib, struct
+          def make_png(w=180, h=180):
+              png = bytearray(b'\x89PNG\r\n\x1a\n')
+              ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
+              png += struct.pack('>I', len(ihdr)) + b'IHDR' + ihdr + struct.pack('>I', zlib.crc32(b'IHDR' + ihdr))
+              raw = bytearray()
+              for y in range(h):
+                  raw.append(0)
+                  for x in range(w):
+                      if x < 10 or x > 170 or y < 10 or y > 170:
+                          raw.extend([28, 28, 30])
+                      elif 50 <= x <= 130 and 55 <= y <= 68:
+                          raw.extend([255, 255, 255])
+                      elif 60 <= x <= 120 and 75 <= y <= 135:
+                          if (73 <= x <= 79) or (87 <= x <= 93) or (101 <= x <= 107):
+                              raw.extend([255, 59, 48] if 85 <= y <= 125 else [255, 255, 255])
+                          else:
+                              raw.extend([255, 255, 255])
+                      else:
+                          raw.extend([255, 59, 48])
+              comp = zlib.compress(bytes(raw))
+              png += struct.pack('>I', len(comp)) + b'IDAT' + comp + struct.pack('>I', zlib.crc32(b'IDAT' + comp))
+              png += struct.pack('>I', 0) + b'IEND' + struct.pack('>I', zlib.crc32(b'IEND'))
+              return bytes(png)
+
+          data = make_png()
+          with open('Payload/AppBatchDeleter.app/AppIcon60x60@3x.png', 'wb') as f: f.write(data)
+          with open('Payload/AppBatchDeleter.app/AppIcon.png', 'wb') as f: f.write(data)
           "
 
-          # 2. Biên dịch file thực thi Swift
+          # 2. Biên dịch Swift
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          
           swiftc AppBatchDeleterApp.swift \
             -parse-as-library \
             -target arm64-apple-ios15.0 \
@@ -57,7 +78,7 @@ jobs:
           # 3. Ký Entitlements root
           ldid -SEntitlements.plist Payload/AppBatchDeleter.app/AppBatchDeleter
 
-          # 4. Ghi cấu hình Info.plist bao gồm khai báo AppIcon
+          # 4. Ghi Info.plist
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.plist">

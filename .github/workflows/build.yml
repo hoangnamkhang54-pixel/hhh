@@ -28,44 +28,12 @@ jobs:
       - name: Set up Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Bien dich, Tao Icon va Ky Entitlements
+      - name: Bien dich va Ky Entitlements
         run: |
           set -e
           mkdir -p Payload/AppBatchDeleter.app
-          
-          # 1. Sinh file App Icon chuẩn bằng Python thuần (zlib + struct, không phụ thuộc pip)
-          python3 -c "
-          import zlib, struct
-          def make_png(w=180, h=180):
-              png = bytearray(b'\x89PNG\r\n\x1a\n')
-              ihdr = struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)
-              png += struct.pack('>I', len(ihdr)) + b'IHDR' + ihdr + struct.pack('>I', zlib.crc32(b'IHDR' + ihdr))
-              raw = bytearray()
-              for y in range(h):
-                  raw.append(0)
-                  for x in range(w):
-                      if x < 10 or x > 170 or y < 10 or y > 170:
-                          raw.extend([28, 28, 30])
-                      elif 50 <= x <= 130 and 55 <= y <= 68:
-                          raw.extend([255, 255, 255])
-                      elif 60 <= x <= 120 and 75 <= y <= 135:
-                          if (73 <= x <= 79) or (87 <= x <= 93) or (101 <= x <= 107):
-                              raw.extend([255, 59, 48] if 85 <= y <= 125 else [255, 255, 255])
-                          else:
-                              raw.extend([255, 255, 255])
-                      else:
-                          raw.extend([255, 59, 48])
-              comp = zlib.compress(bytes(raw))
-              png += struct.pack('>I', len(comp)) + b'IDAT' + comp + struct.pack('>I', zlib.crc32(b'IDAT' + comp))
-              png += struct.pack('>I', 0) + b'IEND' + struct.pack('>I', zlib.crc32(b'IEND'))
-              return bytes(png)
 
-          data = make_png()
-          with open('Payload/AppBatchDeleter.app/AppIcon60x60@3x.png', 'wb') as f: f.write(data)
-          with open('Payload/AppBatchDeleter.app/AppIcon.png', 'wb') as f: f.write(data)
-          "
-
-          # 2. Biên dịch Swift
+          # 1. Biên dịch Swift
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           swiftc AppBatchDeleterApp.swift \
             -parse-as-library \
@@ -75,10 +43,10 @@ jobs:
           
           chmod +x Payload/AppBatchDeleter.app/AppBatchDeleter
 
-          # 3. Ký Entitlements root
+          # 2. Ký Entitlements root
           ldid -SEntitlements.plist Payload/AppBatchDeleter.app/AppBatchDeleter
 
-          # 4. Ghi Info.plist
+          # 3. Ghi Info.plist cơ bản
           cat << 'EOF' > Payload/AppBatchDeleter.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.plist">
@@ -100,13 +68,6 @@ jobs:
               <string>1</string>
               <key>MinimumOSVersion</key>
               <string>15.0</string>
-              <key>CFBundleIconFile</key>
-              <string>AppIcon.png</string>
-              <key>CFBundleIconFiles</key>
-              <array>
-                  <string>AppIcon60x60@3x.png</string>
-                  <string>AppIcon.png</string>
-              </array>
               <key>LSApplicationQueriesSchemes</key>
               <array>
                   <string>filza</string>
@@ -128,7 +89,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-${{ github.run_number }}
-          name: AppBatchDeleter Full Clean Engine Build #${{ github.run_number }}
+          name: AppBatchDeleter Build #${{ github.run_number }}
           files: AppBatchDeleter.ipa
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

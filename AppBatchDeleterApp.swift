@@ -42,48 +42,6 @@ func openInFilza(path: String) {
     }
 }
 
-func removePathRecursively(_ path: String) {
-    elevateToRoot()
-    var isDir: ObjCBool = false
-    if FileManager.default.fileExists(atPath: path, isDirectory: &isDir) {
-        if isDir.boolValue {
-            if let subItems = try? FileManager.default.contentsOfDirectory(atPath: path) {
-                for item in subItems {
-                    let subPath = (path as NSString).appendingPathComponent(item)
-                    removePathRecursively(subPath)
-                }
-            }
-            _ = rmdir(path)
-        } else {
-            _ = unlink(path)
-        }
-    }
-}
-
-func findAllContainerPaths(for bundleID: String) -> [String] {
-    var paths: [String] = []
-    let containerBases = [
-        "/var/mobile/Containers/Data/Application",
-        "/var/mobile/Containers/Shared/AppGroup",
-        "/var/mobile/Containers/Data/PluginKitPlugin"
-    ]
-    
-    for base in containerBases {
-        guard let subdirs = try? FileManager.default.contentsOfDirectory(atPath: base) else { continue }
-        for sub in subdirs {
-            let fullFolder = "\(base)/\(sub)"
-            let metadataPath = "\(fullFolder)/.com.apple.mobile_container_manager.metadata.plist"
-            if FileManager.default.fileExists(atPath: metadataPath),
-               let dict = NSDictionary(contentsOfFile: metadataPath),
-               let identifier = dict["MCMMetadataIdentifier"] as? String,
-               identifier == bundleID {
-                paths.append(fullFolder)
-            }
-        }
-    }
-    return paths
-}
-
 func findBinary(_ name: String) -> String? {
     let candidates = [
         "/var/jb/usr/bin/\(name)",
@@ -116,6 +74,41 @@ func runBinary(_ path: String, args: [String]) -> Int32 {
         return exitStatus
     }
     return status
+}
+
+func removePathRecursively(_ path: String) {
+    elevateToRoot()
+    guard FileManager.default.fileExists(atPath: path) else { return }
+    
+    if let rmPath = findBinary("rm") {
+        _ = runBinary(rmPath, args: ["-rf", path])
+    } else {
+        _ = runBinary("/bin/rm", args: ["-rf", path])
+    }
+}
+
+func findAllContainerPaths(for bundleID: String) -> [String] {
+    var paths: [String] = []
+    let containerBases = [
+        "/var/mobile/Containers/Data/Application",
+        "/var/mobile/Containers/Shared/AppGroup",
+        "/var/mobile/Containers/Data/PluginKitPlugin"
+    ]
+    
+    for base in containerBases {
+        guard let subdirs = try? FileManager.default.contentsOfDirectory(atPath: base) else { continue }
+        for sub in subdirs {
+            let fullFolder = "\(base)/\(sub)"
+            let metadataPath = "\(fullFolder)/.com.apple.mobile_container_manager.metadata.plist"
+            if FileManager.default.fileExists(atPath: metadataPath),
+               let dict = NSDictionary(contentsOfFile: metadataPath),
+               let identifier = dict["MCMMetadataIdentifier"] as? String,
+               identifier == bundleID {
+                paths.append(fullFolder)
+            }
+        }
+    }
+    return paths
 }
 
 func uninstallAppCompletely(app: AppItem) {
